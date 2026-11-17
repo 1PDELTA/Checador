@@ -1,0 +1,6 @@
+fastapi
+uvicorn[standard]
+deepface
+tf-keras
+opencv-python
+pandas

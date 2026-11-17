@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Checador facial</title>
+<style>
+:root{--bg:#eef1f4;--card:#fff;--ink:#1b2733;--mut:#5d6b7a;--line:#d5dce3;--ac:#1f5fbf;--ok:#1e7f4f;--err:#b3261e}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif;padding:28px 18px}
+main{max-width:960px;margin:auto}
+header{display:flex;flex-wrap:wrap;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:22px}
+h1{margin:0;font-size:1.3rem;font-weight:600}
+#reloj{font-size:3.2rem;font-weight:700;letter-spacing:-.02em;font-variant-numeric:tabular-nums;line-height:1}
+.fecha{color:var(--mut);margin:4px 0 0}
+.grid{display:grid;grid-template-columns:1.1fr 1fr;gap:18px}
+@media(max-width:760px){.grid{grid-template-columns:1fr}}
+.col{display:grid;gap:18px;align-content:start}
+section{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:18px}
+h2{margin:0 0 12px;font-size:1.05rem}
+video{width:100%;border-radius:8px;background:#0d141b;transform:scaleX(-1);display:block}
+.row{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:12px}
+button{font:inherit;font-weight:600;border:0;border-radius:8px;padding:10px 16px;background:var(--ac);color:#fff;cursor:pointer}
+button:disabled{opacity:.55;cursor:wait}
+button.sec{background:transparent;color:var(--ac);border:1px solid var(--ac)}
+:focus-visible{outline:3px solid #8fb4ee;outline-offset:2px}
+input[type=text]{font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:8px;flex:1;min-width:150px}
+select{font:inherit;padding:10px 12px;border:1px solid var(--line);border-radius:8px;width:100%;margin-top:12px;background:var(--card);color:var(--ink)}
+label.chk{display:flex;gap:6px;align-items:center;color:var(--mut)}
+#msg{margin-top:12px;padding:10px 12px;border-radius:8px;background:#f3f5f8;color:var(--mut);min-height:44px}
+#msg.ok{background:#e6f4ec;color:var(--ok)}#msg.err{background:#fbeae9;color:var(--err)}
+table{width:100%;border-collapse:collapse}
+th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--line)}
+th{color:var(--mut);font-weight:600;font-size:.9rem}
+.vacio{color:var(--mut);margin:0}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <h1>Checador facial</h1>
+      <p class="fecha" id="fecha"></p>
+    </div>
+    <div id="reloj" aria-live="off">--:--:--</div>
+  </header>
+
+  <div class="grid">
+    <section>
+      <h2>Cámara</h2>
+      <video id="video" autoplay playsinline muted></video>
+      <select id="camara" aria-label="Elegir cámara"></select>
+      <div class="row">
+        <button id="btnChecar">Marcar asistencia</button>
+        <label class="chk"><input type="checkbox" id="auto"> Modo automático (cada 4 s)</label>
+      </div>
+      <div id="msg" role="status">Colócate frente a la cámara y pulsa “Marcar asistencia”.</div>
+    </section>
+
+    <div class="col">
+      <section>
+        <h2>Registrar persona</h2>
+        <div class="row" style="margin-top:0">
+          <input type="text" id="nombre" placeholder="Nombre completo" autocomplete="off">
+          <button class="sec" id="btnRegistrar">Registrar con la cámara</button>
+        </div>
+      </section>
+      <section>
+        <h2>Asistencias de hoy</h2>
+        <div id="tabla"><p class="vacio">Todavía no hay asistencias hoy.</p></div>
+      </section>
+    </div>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const video = $("video"), msg = $("msg");
+let ocupado = false, timer = null;
+
+function actualizarReloj(){
+  const d = new Date();
+  $("reloj").textContent = d.toLocaleTimeString("es-MX", {hour12:false});
+  $("fecha").textContent = d.toLocaleDateString("es-MX", {weekday:"long", day:"numeric", month:"long", year:"numeric"});
+}
+setInterval(actualizarReloj, 1000); actualizarReloj();
+
+async function iniciarCamara(id){
+  if(!navigator.mediaDevices){
+    mostrar("El navegador bloqueó la cámara. Abre la página en http://127.0.0.1:8000 o http://localhost:8000.", "err");
+    return;
+  }
+  try{
+    if(video.srcObject) video.srcObject.getTracks().forEach(t => t.stop());
+    const pedido = id ? {video:{deviceId:{exact:id}}} : {video:true};
+    video.srcObject = await navigator.mediaDevices.getUserMedia(pedido);
+    await video.play();
+    // Llenar el selector (los nombres solo aparecen después de dar permiso)
+    const camaras = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === "videoinput");
+    const actual = video.srcObject.getVideoTracks()[0].getSettings().deviceId;
+    $("camara").replaceChildren(...camaras.map((c, i) =>
+      new Option(c.label || "Cámara " + (i + 1), c.deviceId, false, c.deviceId === actual)));
+  }catch(e){
+    const causas = {
+      NotAllowedError: "Permiso denegado. Permite la cámara en el candado junto a la dirección y recarga la página.",
+      NotFoundError: "No se encontró ninguna cámara conectada.",
+      NotReadableError: "Otra aplicación está usando la cámara. Ciérrala y recarga la página."
+    };
+    mostrar(causas[e.name] || "No se pudo abrir la cámara (" + e.name + ").", "err");
+  }
+}
+$("camara").onchange = e => iniciarCamara(e.target.value);
+iniciarCamara();
+
+function mostrar(texto, tipo){ msg.textContent = texto; msg.className = tipo || ""; }
+
+function captura(){
+  const c = document.createElement("canvas");
+  c.width = video.videoWidth; c.height = video.videoHeight;
+  c.getContext("2d").drawImage(video, 0, 0);
+  return c.toDataURL("image/jpeg", 0.9);
+}
+
+async function enviar(url, cuerpo){
+  const r = await fetch(url, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(cuerpo)});
+  const d = await r.json();
+  if(!r.ok) throw new Error(d.detail || "Error desconocido");
+  return d;
+}
+
+async function checar(){
+  if(ocupado || !video.videoWidth) return;
+  ocupado = true; $("btnChecar").disabled = true;
+  mostrar("Analizando rostro…");
+  try{
+    const d = await enviar("/api/checar", {image: captura()});
+    if(!d.reconocido) mostrar(d.mensaje, "err");
+    else if(d.nuevo) mostrar(d.nombre + ": asistencia registrada a las " + d.hora + ".", "ok");
+    else mostrar(d.nombre + " ya había marcado hoy a las " + d.hora + ".", "");
+    cargarTabla();
+  }catch(e){ mostrar(e.message, "err"); }
+  ocupado = false; $("btnChecar").disabled = false;
+}
+
+async function registrar(){
+  const nombre = $("nombre").value.trim();
+  if(!nombre){ mostrar("Escribe un nombre antes de registrar.", "err"); return; }
+  if(ocupado || !video.videoWidth) return;
+  ocupado = true; $("btnRegistrar").disabled = true;
+  mostrar("Registrando…");
+  try{
+    const d = await enviar("/api/registrar", {nombre, image: captura()});
+    mostrar(d.mensaje, "ok"); $("nombre").value = "";
+  }catch(e){ mostrar(e.message, "err"); }
+  ocupado = false; $("btnRegistrar").disabled = false;
+}
+
+async function cargarTabla(){
+  const filas = await (await fetch("/api/asistencia")).json();
+  const cont = $("tabla");
+  if(!filas.length){ cont.innerHTML = '<p class="vacio">Todavía no hay asistencias hoy.</p>'; return; }
+  const t = document.createElement("table");
+  t.innerHTML = "<tr><th>Nombre</th><th>Hora</th></tr>";
+  filas.forEach(f => {
+    const tr = t.insertRow();
+    tr.insertCell().textContent = f.nombre;
+    tr.insertCell().textContent = f.hora;
+  });
+  cont.replaceChildren(t);
+}
+
+$("btnChecar").onclick = checar;
+$("btnRegistrar").onclick = registrar;
+$("auto").onchange = e => {
+  clearInterval(timer);
+  if(e.target.checked){ timer = setInterval(checar, 4000); checar(); }
+};
+cargarTabla();
+</script>
+</body>
+</html>
